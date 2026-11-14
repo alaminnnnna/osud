@@ -1,3 +1,13 @@
+
+> **Phase 4 update (2026-11-14):** This document is preserved as a historical
+> record of the phase it describes. Statements about the architecture —
+> separate backend/frontend deployments, PostgreSQL as the live database,
+> static-site frontend, Express API — are **superseded**: Medora is now one
+> unified Next.js application (frontend + `/api/v1` on one origin) over an
+> **embedded SQLite database** (`data/medora.sqlite`, no external database
+> service). See `PHASE4_COMPLETION_REPORT.md` and `README.md`. The measured
+> results below are kept exactly as they were recorded.
+
 # Medora Platform — Production Backend
 
 Database-backed REST API, import engine, server-side search, admin dashboard and

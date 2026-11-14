@@ -37,8 +37,8 @@ export async function POST(req: NextRequest) {
 
     // Idempotent, history-preserving upserts — the same batch pipeline the
     // file importer uses, so ingestion can never corrupt existing data.
-    const state = await getImportState();
-    const stats = await withTransaction((client) => upsertBatch(client, state, null, validRecs));
+    const state = getImportState();
+    const stats = withTransaction(() => upsertBatch(state, null, validRecs));
 
     return ok({
       received: records.length,

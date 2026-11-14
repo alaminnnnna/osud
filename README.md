@@ -1,249 +1,140 @@
-# Bangladesh Medicine Price Database — MedPrice BD
+# Medora — Bangladesh Medicine Price Intelligence Platform
 
-A local, self-contained **medicine price intelligence platform** for Bangladesh:
+Medora is a **self-contained medicine price discovery and comparison platform**
+for Bangladesh. One repository contains everything: the unified Next.js
+application (frontend **and** REST API), its **embedded SQLite database** with
+the full verified dataset of **58,297 medicine records**, the independent
+scraper, and all operational tooling.
 
-- **`scrape.js`** — one Node.js file that crawls the public Arogga catalogue API,
-  validates every record, keeps price history, and writes the entire dataset +
-  the web app bundles. No backend server, no npm dependencies, no credentials.
-- **`data/`** — the raw dataset (JSON / JSONL / CSV) plus crawl, validation and
-  failure reports.
-- **`web/`** — a static, premium price-catalogue app (light & deep dark themes,
-  instant search, filters, offers, compare, price-history charts, public file API,
-  sitemaps, prerendered SEO pages, data dashboard) served from plain files.
+**No separately rented database service is required.** The database lives in
+the project as `data/medora.sqlite`.
 
-> This is a **price catalogue** — it is not medical advice, not a pharmacy, and it
-> never prescribes or recommends treatments.
+> This is a **price catalogue** — it is not medical advice, not a pharmacy, and
+> it never prescribes or recommends treatments.
 
 ---
 
+## Architecture (Phase 4)
+
+```text
+medora/
+├── web/                     # ONE unified application
+│   ├── app/                 #   Next.js 15 App Router (frontend pages)
+│   │   ├── api/v1/…         #   REST API route handlers (same origin)
+│   │   ├── search|companies|categories|offers|compare|admin|api-docs
+│   ├── lib/server/          #   shared server layer: SQLite client (Drizzle),
+│   │   │                    #     queries, search engine, ingestion, auth
+│   ├── components/          #   React components (premium UI, dark/light)
+│   ├── scripts/             #   db:init/migrate/verify/backup/restore, importer
+│   └── package.json
+├── migrations/sqlite/       # schema migrations (FTS5 search infrastructure)
+├── data/
+│   ├── medora.sqlite        # embedded database (created by db:init/migrator)
+│   ├── products.jsonl       # original crawler dataset (58,297 unique records)
+│   └── …                    # crawl, validation and failure reports
+├── scrape.js                # independent Node.js scraper (no DB writes)
+├── platform/                # legacy Express API + PostgreSQL tools (superseded;
+│                            #   import CLI lineage and API tests still maintained)
+└── package.json             # root-level commands (see below)
+```
+
+- **Frontend and API are one application on one origin.** Pages read the
+  database directly through the shared service layer; the public REST API at
+  `/api/v1/*` wraps the exact same functions — identical envelopes, ranking,
+  rate limiting, CORS and auth semantics as the audited platform API.
+- **Embedded SQLite** (`better-sqlite3` through **Drizzle ORM**): WAL mode,
+  enforced foreign keys, FTS5 lexical index (`unicode61`) plus a **trigram
+  fuzzy index** for typo tolerance — replacing PostgreSQL tsvector and pg_trgm.
+- **The scraper stays independent**: `node scrape.js` crawls the public Arogga
+  catalogue API into `data/products.jsonl` (+ validation reports). It never
+  executes during a website request and never writes the database directly.
+- `platform/` is retained as legacy reference (standalone Express API +
+  PostgreSQL tooling). It is superseded by the unified app; the API test-suite
+  (`platform/scripts/api-tests.mjs`) is maintained and can target either.
+
 ## Quick start
 
-Requirements: Node.js ≥ 18 (uses the built-in `fetch`).
-
-A full crawl collected **58,297 unique products** (101.28% of the search API's declared
-57,563 — the reconciliation pass recovers products the category buckets cannot reach
-from their public product pages; 2 retired product ids failed and are reported).
+Requirements: Node.js ≥ 20.
 
 ```bash
-# 1. Crawl the catalogue (first run discovers + collects everything)
-node scrape.js
-
-# 2. Serve the web app (or open web/index.html directly — no server needed)
-npm run serve          # http://localhost:8080
-# …or any static server: python3 -m http.server 8080 --directory web
+npm install                 # installs web/ dependencies
+npm run db:init             # create data/medora.sqlite + apply migrations
+npm run import:data         # load data/products.jsonl (58,297 records, ~10 s)
+npm run db:verify           # integrity + count + uniqueness checks
+npm run dev                 # http://localhost:3000 (frontend + API)
 ```
 
-Subsequent runs update prices, detect new products, keep history, retry failed
-pages and regenerate the web bundles:
+Production:
 
 ```bash
-node scrape.js                # update run (resumes an interrupted run first)
-node scrape.js --rebuild-web  # rebuild web/ bundles only (no re-crawl)
+npm run build               # Next.js production build
+npm run start               # serve on :3000
+npm test                    # 50-check API suite against :3000
 ```
 
-## CLI options
+## Root-level commands
 
-| Flag | Default | Meaning |
-| --- | --- | --- |
-| `--per-page=N` | 100 | rows per API page (5–100) |
-| `--concurrency=N` | 3 | parallel requests |
-| `--rate-ms=N` | 150 | minimum ms between request starts |
-| `--timeout-ms=N` | 20000 | per-request timeout |
-| `--retries=N` | 4 | retries per request (exponential backoff) |
-| `--category=ID` | — | restrict crawl to one category subtree |
-| `--max-pages=N` | — | safety cap on pages per bucket |
-| `--no-verify` | — | skip secondary (product-page) price verification |
-| `--max-verify=N` | 25 | detail-page verifications per run |
-| `--fresh` | — | ignore checkpoint, start a new run |
-| `--rebuild-web` | — | rebuild `web/` bundles from existing data |
-| `--site-base=URL` | `https://example.com` | public base URL used in sitemaps / canonicals |
-
-Environment variants exist for everything (`SCRAPER_PER_PAGE`, `SCRAPER_CONCURRENCY`,
-`SCRAPER_RATE_MS`, `SITE_BASE`, …).
-
-## How the crawler reaches every product
-
-The source API serves **at most ~1,000 rows per query window** (page 11 with
-`_perPage=100` answers `status:"fail"`), and the catalogue holds 57,563 products per the search API (58,299 product pages listed in the public sitemaps).
-The engine therefore crawls in *buckets* that each fit the window:
-
-1. **Discovery** — global probe (totals, product-type taxonomy) + the full
-   category tree harvested from the public sitemap files (~1,300 categories).
-2. **Sweep** — one tiny request per category (facets included). The single returned
-   row reveals whether the category is a *leaf* (its products carry its id) and its
-   exact total.
-3. **Partition** — leaf categories ≤ 990 rows are buckets; bigger leaves are
-   subdivided by dosage form (`_form`), and if still too big, by brand
-   (`_brand_id`) inside (category × form). Anywhere facet sums fall short of the
-   parent total, a **coverage gap is recorded** — never silently ignored.
-4. **Crawl** — bounded worker pool, global rate limit, exponential-backoff
-   retries, per-page checkpointing, final failure sweep.
-
-The system **never reports full coverage** unless every planned bucket page was
-processed and no gap remains — interrupted runs resume; failed pages are retried
-on the next run.
-
-## Data files (`data/`)
-
-| File | Contents |
+| Command | What it does |
 | --- | --- |
-| `products.json` | normalised product records (validation status included) |
-| `products.jsonl` | raw API records, one JSON object per line (full provenance) |
-| `products.csv` | flat spreadsheet export |
-| `prices.json` | current price per product (regular + offer, base + sales unit) |
-| `price-history.json` | append-only price-change history |
-| `companies.json` / `generics.json` / `categories.json` | directories with counts |
-| `images.json` | image URL registry (original CDN URLs, no downloads) |
-| `crawl-progress.json` | checkpoint (resume) |
-| `failed-records.json` | failed pages, failed records, verification failures |
-| `validation-report.json` | validation statuses, conflicts, duplicate candidates |
-| `crawl-report.json` | the full run report (also printed to the console) |
+| `npm run dev` / `build` / `start` / `lint` / `typecheck` | unified web app |
+| `npm test` | 50-check API + admin + ingest + error-handling suite (`API_BASE` overrides target) |
+| `npm run db:init` | create the SQLite file and apply migrations (never erases data) |
+| `npm run db:migrate` | apply pending migrations (ledger in `_medora_migrations`) |
+| `npm run db:verify` | integrity, counts, slug uniqueness, orphans, price semantics, FTS sync |
+| `npm run db:backup` | consistent snapshot via SQLite `VACUUM INTO` (+ integrity check) |
+| `npm run db:restore -- <file>` | verify + atomically replace the live database |
+| `npm run import:data` | full JSONL import (idempotent upserts; fresh full import rebuilds counts) |
+| `npm run import:resume` | continue a checkpointed import job |
+| `npm run import:dry-run` | validation only — no database writes |
+| `npm run scrape` | independent crawl → `data/products.jsonl` |
 
-### Price semantics (important)
+The database file defaults to `<repo>/data/medora.sqlite`; override with
+`MEDORA_DB_PATH` (see `web/.env.example`).
 
-| Field | Meaning | Source |
-| --- | --- | --- |
-| `regular.base` | regular price per **base unit** (e.g. per tablet) | `pv_mrp` |
-| `offer.base` | offer price per base unit | `pv_b2c_discounted_price` |
-| `regular.sales` | regular price per **sales unit** (e.g. per strip) | `pv_b2c_mrp` |
-| `offer.sales` | offer price per sales unit | `pv_b2c_price` |
+## The database
 
-Base-unit and sales-unit prices are **separate values with their own units** — they
-are never mixed or recomputed. B2B fields exist in the raw data but are never shown.
-If the offer equals the regular price, both are kept as-is (no invented discount).
-If a price is missing, it is marked missing.
+`data/medora.sqlite` (~106 MB) contains every table of the audited PostgreSQL
+schema, with IDs and semantics preserved: `sources`, `companies`, `categories`,
+`medicines`, `medicine_prices`, `product_images`, `medicine_categories`,
+`price_history`, `scrape_runs`, `import_jobs`, `data_validations`,
+`slug_redirects` — plus `medicines_fts` (lexical) and `medicines_fuzzy`
+(trigram) search indexes kept in sync by triggers.
 
-### Validation statuses
+Recovery paths (the file itself is not committed — it exceeds GitHub's 100 MB
+limit; the dataset and every tool needed to rebuild it are committed):
 
-`VERIFIED` · `PARTIALLY_VERIFIED` (minor gaps) · `NEEDS_RECHECK` (price anomaly,
-missing prices, or API vs product-page disagreement — both values preserved) ·
-`FAILED` (structurally broken). Duplicate detection: exact product-id duplicates
-are de-duplicated and reported; same-fingerprint candidates (name + strength +
-generic + manufacturer + form + pack) are listed in the validation report and
-**never merged**.
+1. **From the dataset**: `npm run db:init && npm run import:data` (~10 s).
+2. **From the legacy PostgreSQL backup** (preserves price history, validation
+   records, import jobs, scrape runs): `node web/scripts/migrate-pg-to-sqlite.mjs`.
 
-## Web app (`web/`)
+## Public API (same origin as the site)
 
-Works from `file://` (bundles load via `<script>`) or any static host.
-
-- Home: hero search with suggestions + popular chips, live "price board" of real
-  offers, dataset stats, recently updated prices, verified offers, company and
-  category directories, data-transparency sections.
-- Search: instant client-side search (exact / prefix / substring / Bengali /
-  typo tolerance) over a generated postings index; filter sidebar (company,
-  category, form, type, prescription, offer-only, price range), sorting,
-  pagination, active filter chips, smart empty states.
-- Medicine page: full price panel (regular vs offer per sales unit **and** base
-  unit), pack composition, quantity limits, verification stamp, price-history
-  chart (only real recordings — history builds across runs), related medicines,
-  share / favourite / compare, link to the source listing.
-- Companies & categories: directories with real counts + paginated product grids.
-- Offers: only items whose listed offer price is genuinely below regular.
-- Compare: side-by-side table (up to 4), with base-unit price for fair pack-size
-  comparison.
-- API docs: documents the bundled read-only JSON API + OpenAPI download.
-- Data dashboard: monitoring-style dataset health (coverage, failures, gaps,
-  duplicates, freshness) from the crawl report.
-- Themes: light / **deep dark** / system, no flash on load, persisted.
-- SEO: per-route titles, descriptions, canonicals, Open Graph, JSON-LD
-  (WebSite + SearchAction, Product + Offer — only real values, never invented
-  ratings/availability), `sitemap.xml` index (static/company/category/products),
-  `robots.txt`, prerendered static pages for top medicines, companies, categories,
-  and a `404.html` SPA fallback.
-
-## Public JSON API (bundled)
-
-Read-only static files under `web/api/v1/`:
-
-```
-GET /api/v1/health.json
-GET /api/v1/meta.json
-GET /api/v1/medicines.json            → page links
-GET /api/v1/medicines/page-0001.json  (100/page; capped — see file's "truncated" flag)
-GET /api/v1/offers.json
-GET /api/v1/offers/page-0001.json
-GET /api/v1/companies.json
-GET /api/v1/categories.json
-GET /api/v1/openapi.json              (OpenAPI 3.1 spec of the above)
-```
-
-The full per-medicine dataset lives in `web/assets/js/db/` (chunked product rows +
-postings search index) — the same schema a dynamic server would expose.
+`/api/v1/medicines`, `/medicines/:slug`, `/medicines/:id`,
+`/medicines/:slug/price-history`, `/search`, `/search/suggestions`, `/offers`,
+`/companies`, `/companies/:slug`, `/categories`, `/categories/:slug`,
+`/stats`, `/health`, plus Basic-auth `/api/v1/admin/metrics` and
+bearer-token `/api/v1/ingest/records` + `/ingest/runs` for the secure
+scraper ingestion pipeline. OpenAPI reference: `/api-docs`.
 
 ## Deployment
 
-Static hosting only — no build step, no server:
+- **Render (recommended, fully self-contained)** — see
+  [`DEPLOYMENT_RENDER.md`](DEPLOYMENT_RENDER.md): one web service + persistent
+  disk holding the SQLite file.
+- **Vercel** — see [`DEPLOYMENT_VERCEL.md`](DEPLOYMENT_VERCEL.md): honest
+  limitations (ephemeral serverless filesystem); Render is the self-contained
+  option.
 
-- **Vercel** — project root = `web/` (framework preset “Other”). `vercel.json` is
-  optional; add a rewrite of `/(.*)` to `/index.html` for SPA routes. Set no env
-  vars. Deploy the whole repo instead if you also want `data/` private.
-- **Render** — New → Static Site. Build command: *none*; publish directory: `web`.
-  SPA rewrite rule: `/*  →  /index.html  200`.
-- **Netlify / GitHub Pages / nginx / python http.server** — serve `web/`;
-  for clean-URL sitemap paths (`/m/<slug>`) enable “pretty URLs” or an equivalent
-  rewrite. Regenerate before deploying with your real domain:
-  `node scrape.js --rebuild-web --site-base=https://your-domain`.
-- **Do not** deploy `data/` publicly if you consider crawl details private — the
-  web app itself only needs `web/`.
+## Data provenance & limitations
 
-## Phase 2 — production backend (`platform/`)
+- Prices are **as listed by the public Arogga catalogue API** — never edited,
+  never invented; offers are shown only when genuinely below the regular price.
+- A few categories carry placeholder names (`Category 6574`) because the source
+  API exposes only numeric ids for them — preserved as crawled, in both the
+  legacy PostgreSQL and SQLite datasets.
+- Uncertain duplicate products are **flagged** (`duplicate_of` +
+  `NEEDS_RECHECK`), never merged and never discarded.
 
-A database-backed, dynamic platform layer now ships alongside the static app
-(see `PHASE2_AUDIT.md` and `platform/README.md`):
-
-- **PostgreSQL schema** for 12 normalized tables (Medicine, Company, Category,
-  MedicineCategory, MedicinePrice, PriceHistory, ProductImage, Source,
-  ScrapeRun, ImportJob, DataValidation, SlugRedirect) — canonical
-  `prisma/schema.prisma` + versioned SQL migrations (`npm run db:migrate`).
-- **Import engine** (`npm run import:data` / `import:resume` / `import:dry-run`)
-  — streaming JSONL import of the 58k-record dataset with checkpoint/resume,
-  idempotent upserts, price-history preservation, duplicate-candidate reporting
-  (never auto-merged), and `IMPORT_REPORT.md`.
-- **REST API** `/api/v1/*` — medicines, server-side search (FTS + trigram with
-  deterministic ranking), offers, companies, categories, price history,
-  health/stats — rate limiting, CORS, cache headers, safe errors.
-- **SEO** — dynamic partitioned sitemaps + robots.txt; **admin** dashboard and
-  **ingestion** API behind authentication.
-- TypeScript + zod throughout; see `platform/PRISMA.md` for adopting the
-  Prisma client.
-
-## Project structure
-
-```
-├── scrape.js            # the entire crawling engine (single file)
-├── data/                # dataset + reports (generated)
-├── web/
-│   ├── index.html       # app shell (no build step)
-│   ├── DESIGN.md        # design direction, tokens, audit results
-│   ├── assets/
-│   │   ├── css/         # tokens / base / components / views
-│   │   ├── js/          # shell, router, store, db loader, search engine, ui kit
-│   │   │   ├── db/      # AUTO-GENERATED: meta, dicts, slugs, index, chunks, history
-│   │   │   └── views/   # one file per route
-│   │   └── icons/       # favicon
-│   ├── api/v1/          # AUTO-GENERATED: static JSON API + OpenAPI
-│   ├── m/, companies/, categories/   # AUTO-GENERATED prerendered SEO pages
-│   └── sitemap*.xml, robots.txt      # AUTO-GENERATED
-└── README.md
-```
-
-## Compliance & fair use
-
-- No credentials, cookies or sessions are used; no paywalled or private data.
-- Defaults are deliberately gentle (rate limit, low concurrency, retries with
-  backoff); the API is public and its responses are explicitly cacheable.
-- `api.arogga.com/robots.txt` currently disallows crawling: keep volume modest
-  (defaults do), use this locally for personal price reference, and contact the
-  source before any large-scale or commercial reuse.
-- Product data © the respective manufacturers and the source platform.
-
-## Known limitations
-
-- The API window (~1,000 rows/query) is probed at runtime; if the source changes
-  its caps or facets, coverage gaps are reported honestly rather than papered over.
-- The static JSON API exposes paginated listings (capped, flagged `truncated`);
-  arbitrary server-side queries need a small server, documented in `/api-docs`.
-- Price-history charts need ≥ 2 recordings (they build as re-runs happen).
-- Client-side search ships the postings index (~a few MB) on first search — fine
-  locally and on static hosts; swap in a server-backed search for low-bandwidth
-  production use.
+Detailed phase history: [`PHASE4_COMPLETION_REPORT.md`](PHASE4_COMPLETION_REPORT.md),
+[`PHASE3_COMPLETION_REPORT.md`](PHASE3_COMPLETION_REPORT.md),
+[`PHASE2_AUDIT.md`](PHASE2_AUDIT.md).

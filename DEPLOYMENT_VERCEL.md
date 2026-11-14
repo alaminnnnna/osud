@@ -1,41 +1,40 @@
-# Deploying the Medora frontend to Vercel
+# Deploying Medora to Vercel — the honest assessment
 
-The Next.js app lives in `web/` (App Router, TypeScript, Tailwind 4). The static
-site in the same folder is **not** served by the Next app and can stay as-is.
+**Summary: a fully self-contained writable SQLite database is NOT feasible on
+Vercel under the current runtime constraints. Render
+([`DEPLOYMENT_RENDER.md`](DEPLOYMENT_RENDER.md)) is the self-contained
+deployment option.** This document explains exactly why, and what *would* work
+on Vercel — without silently adding a paid external database.
 
-## 1. Import the project
-1. Push the repository to GitHub/GitLab.
-2. Vercel → New Project → import the repo.
-3. Root Directory: `web`.
+## Why persistent SQLite does not work on Vercel
 
-## 2. Build settings (auto-detected)
-- Framework: Next.js
-- Build: `npm run build` · Install: `npm install` · Output: handled by Vercel
-- Node: 20+ (project engines)
+1. **Ephemeral filesystem.** Only `/tmp` is writable, and each serverless
+   invocation may run on a different instance with a fresh `/tmp`. A SQLite
+   file written during request A is gone (or belongs to another instance) for
+   request B.
+2. **No shared writable disk.** Vercel offers no persistent-disk primitive
+   equivalent to Render's. There is no single filesystem the whole deployment
+   can treat as its database home.
+3. **Forked state.** Even if each instance bundled its own copy of
+   `data/medora.sqlite`, ingest writes (admin, `/api/v1/ingest/*`, price
+   history) would diverge per instance — silent data corruption by design.
+4. **Native driver constraint.** `better-sqlite3` works as a
+   `serverExternalPackages` dependency, so the *driver* is fine — the platform
+   storage is the blocker, not the code.
 
-## 3. Environment variables (Project → Settings → Environment Variables)
-| Key | Example | Notes |
-| --- | --- | --- |
-| `BACKEND_URL` | `https://medora-api.onrender.com` | Render backend base URL, **no** `/api/v1` suffix |
-| `NEXT_PUBLIC_SITE_URL` | `https://medora.vercel.app` | Canonical URLs, metadata, sitemap |
-| `ADMIN_USERNAME` | (secret) | enables `/admin` (middleware Basic auth) |
-| `ADMIN_PASSWORD` | (secret) | must match the backend's admin creds |
+## What Vercel *can* do with this repository
 
-Never add `DATABASE_URL` to the frontend — it has no direct database access;
-all data flows through the backend API (`BACKEND_URL`).
+- **Read-only catalogue preview (no persistence claims).** The build can bundle
+  a database snapshot, and every page/API reads work — but any write is lost
+  on the next invocation. Useful for demos; never for production data.
+- **Full production parity** requires an external managed database
+  (PostgreSQL on Neon/Supabase/Railway, or a managed SQLite-compatible store).
+  That is precisely the "separately rented database service" this project
+  explicitly avoids, so it is **not configured here**. The legacy PostgreSQL
+  implementation remains in `git` history if that trade-off is ever wanted.
 
-## 4. Deploy
-Deploy → verify:
-- `/` renders the live price board (backend reachable)
-- `/napa-500-tablet` shows prices + verification stamp
-- `/robots.txt` lists both sitemaps; `/sitemap.xml` returns frontend routes
-- unknown slugs return **HTTP 404** (middleware gate), e.g. `/definitely-not-a-real-page`
+## Recommended path
 
-## 5. Notes
-- All data routes are dynamic (`force-dynamic`) — data freshness is guaranteed at
-  request time; Vercel edge caching of API responses is controlled by the backend's
-  `Cache-Control` headers passed through Next's fetch cache.
-- The `/api/suggest` route proxies suggestions to the backend so the browser never
-  talks to the backend origin directly (keeps the backend private if you enable
-  Vercel→Render private networking or IP allow-listing).
-- Secrets are never committed: keep only `.env.example` files in git.
+Deploy to **Render** with a persistent disk — one web service, frontend and
+backend together, database on the disk, backups on the same disk. See
+[`DEPLOYMENT_RENDER.md`](DEPLOYMENT_RENDER.md).

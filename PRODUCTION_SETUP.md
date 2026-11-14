@@ -1,61 +1,75 @@
-# Medora — Production Setup (Phase 3 complete platform)
+# Medora — Production Setup (Phase 4: unified app + embedded SQLite)
 
 Architecture:
 ```
-Browser → Next.js frontend (Vercel, web/) → REST API (Render, platform/)
-       → PostgreSQL (Render managed, 58,297 medicines)
-Scraper (scrape.js, independent host) → optional ingestion API (bearer token)
+Browser → ONE Next.js application (web/) = frontend + /api/v1 API
+                 ↓
+        embedded SQLite (data/medora.sqlite or $MEDORA_DB_PATH,
+        WAL mode, FTS5 + trigram search, 58,297 medicines)
+Scraper (scrape.js, independent host) → ingestion API (bearer token)
 ```
 
-## Local end-to-end run (verified in this repo)
+**No separately rented database service.** The database is a project file.
+Recommended host: Render with a persistent disk — see
+[`DEPLOYMENT_RENDER.md`](DEPLOYMENT_RENDER.md). Why Vercel is not viable for
+persistent writes: [`DEPLOYMENT_VERCEL.md`](DEPLOYMENT_VERCEL.md).
+
+## Environment variables (web/.env.example is the template)
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `MEDORA_DB_PATH` | no (default `<repo>/data/medora.sqlite`) | database file location; on Render point it at the disk mount |
+| `NEXT_PUBLIC_SITE_URL` | yes in production | canonical URLs, metadata, sitemap |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | to enable admin | Basic auth for `/admin` and `/api/v1/admin/metrics` |
+| `INGEST_TOKEN` | to enable ingestion | bearer token for `/api/v1/ingest/*` |
+| `ACCESS_CONTROL_ORIGIN` | no (`*` default) | CORS allow-list (comma-separated origins) |
+| `RATE_LIMIT_PER_MINUTE` | no (`120`) | per-IP fixed-window limiter (`0` disables) |
+| `CACHE_LIST_SECONDS` | no (`60`) | public API cache headers |
+
+Never commit real credentials or tokens.
+
+## First production bring-up
+
 ```bash
-# 1. Database (any PostgreSQL 14+; docker-compose provided in platform/)
-cd platform
-cp .env.example .env            # DATABASE_URL=postgres://medora:medora@localhost:5432/medora
-docker compose up -d            # or: initdb + pg_ctl (see POSTGRES_VERIFICATION_REPORT.md)
-
-# 2. Migrate + import + verify
 npm install
-npm run db:migrate              # 12 tables + FTS/trigram search infrastructure
-npm run import:data             # 107,396 lines → 58,297 medicines (~12 s locally)
-npm run db:verify               # ALL CHECKS PASSED (counts, orphans, slugs, spot checks)
-
-# 3. Backend API
-npm run dev                     # http://localhost:4000  (49/49 integration tests: scripts/api-tests.mjs)
-
-# 4. Frontend (separate shell)
-cd ../web
-cp .env.example .env.local      # BACKEND_URL=http://localhost:4000
-npm install
-npm run build && npm run start  # http://localhost:3000  (production build verified)
+npm run db:init        # create DB + migrations (never erases existing data)
+npm run import:data    # load data/products.jsonl → 58,297 medicines (~10 s)
+npm run db:verify      # must pass all checks (counts, slugs, orphans, FTS)
+npm run build
+npm run start          # :3000 — frontend and API on one origin
+npm test               # 50-check suite against http://localhost:3000
 ```
 
-## Secrets
-- Only `.env.example` files are committed. Real credentials live in platform/.env
-  (git-ignored) and in Vercel/Render dashboards.
-- The frontend never receives `DATABASE_URL` — it talks to the backend API only.
-- Ingestion uses a 64-hex bearer token; admin uses Basic auth with strong values.
+## Data integrity & operations
 
-## Data pipeline (idempotent, provenance-tracked)
-- `npm run import:data` — full import (truncates + rebuilds catalog; exact counts)
-- `npm run import:resume` — continues a checkpointed interrupted job
-- `POST /api/v1/ingest/records` — validated batches from the scraper, history-preserving
-- `POST /api/v1/ingest/runs` — run summaries (scrape.js posts automatically when
-  `MEDORA_INGEST_URL` + `MEDORA_INGEST_TOKEN` are set — non-blocking)
-- Price changes append to `price_history`; uncertain duplicates are flagged
-  (`NEEDS_RECHECK` + `duplicate_of`), never merged; slugs never change.
+- **Verification** (`npm run db:verify`): `PRAGMA integrity_check`, foreign-key
+  check, 58,297-medicine count, slug uniqueness, orphan rows, offer-vs-regular
+  price semantics, FTS/trigram index sync. Non-zero exit on failure.
+- **Backups** (`npm run db:backup`): consistent snapshot with `VACUUM INTO`
+  (safe while the app runs), integrity-checked. Schedule daily via a cron job.
+- **Restore** (`npm run db:restore -- <backup>`): verifies, keeps the previous
+  file as `.pre-restore.bak`, atomically swaps. Restart the app afterwards.
+- **Migrations**: `npm run db:migrate` applies pending files from
+  `migrations/sqlite/` with a ledger; safe on every deploy.
+- **Import safety**: `import:data` uses the same idempotent, history-preserving
+  upsert pipeline as API ingestion; uncertain duplicates are flagged, never
+  merged. `import:resume` continues a checkpointed job; `import:dry-run`
+  validates without writing.
 
-## Invariants (do not break in future phases)
-1. Base-unit and sales-unit prices are separate columns, never derived from each other.
-2. Offer prices only surface when the source lists a genuine discount.
-3. `scrape.js` stays independent; never run it during website requests.
-4. The original `data/` dataset is read-only input.
-5. The static site in `web/` remains functional until the Next.js app fully replaces it in deployment.
+## Security notes
 
-## Verification artifacts in this repo
-- `POSTGRES_VERIFICATION_REPORT.md` — real migrate/import/verify outputs + bug log
-- `platform/IMPORT_REPORT.md` — import totals
-- `platform/scripts/api-tests.mjs` — 49/49 integration tests (live backend)
-- `platform/scripts/db-integrity.ts` — JSONL ↔ DB field-level comparison
-- `web/` — Next.js app (16 routes, production build verified, browser-tested
-  desktop + mobile + dark theme)
+- Database credentials: none to leak — the database is a file; protect the
+  host/disk instead.
+- Admin and ingestion are disabled unless their env vars are set; tokens live
+  only in the hosting provider's environment settings.
+- Rate limiting, CORS allow-list, safe error envelopes and `no-store` on
+  admin/ingest paths mirror the audited platform API.
+- The scraper never runs as part of website request handling.
+
+## Legacy PostgreSQL platform (superseded)
+
+`platform/` retains the Express API, PostgreSQL migrations/tools and the
+maintained API test-suite. The unified app replaces it at runtime; its
+database can be recovered into SQLite via
+`node web/scripts/migrate-pg-to-sqlite.mjs` (preserves price history,
+validation records, import jobs, scrape runs, slug redirects, and every ID).

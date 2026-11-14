@@ -153,15 +153,32 @@ log('');
   });
   check('ingest run summary accepted', runRes.status === 200);
 
-  // Real record-level ingestion: modify Napa 500's offer sales price → history row
-  const db = await (async () => {
+  // Real record-level ingestion: modify Napa 500's offer sales price → history row.
+  // DB-effect verification reads the database the API target actually uses.
+  const unifiedTarget = (process.env.API_BASE ?? '').includes(':3000');
+  const { createRequire } = await import('node:module');
+  const pathMod = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const scriptDir9 = pathMod.dirname(fileURLToPath(import.meta.url));
+  let med, beforeHist, readOfferSales, readHistCount, closeDb = async () => {};
+  if (unifiedTarget) {
+    const requireWeb = createRequire(pathMod.resolve(scriptDir9, '..', '..', 'web', 'package.json'));
+    const Database = requireWeb('better-sqlite3');
+    const sq = new Database(pathMod.resolve(scriptDir9, '..', '..', 'data', 'medora.sqlite'), { readonly: true });
+    med = sq.prepare('SELECT id FROM medicines WHERE source_product_id = 12474').get();
+    readHistCount = () => sq.prepare('SELECT count(*) AS c FROM price_history WHERE medicine_id = ?').get(med.id).c;
+    readOfferSales = () => sq.prepare('SELECT CAST(offer_sales AS TEXT) AS os FROM medicine_prices WHERE medicine_id = ?').get(med.id).os;
+    closeDb = async () => sq.close();
+  } else {
     const { Client } = await import('pg');
     const c = new Client({ connectionString: 'postgres://medora@127.0.0.1:5433/medora' });
     await c.connect();
-    return c;
-  })();
-  const med = (await db.query("SELECT id FROM medicines WHERE source_product_id = 12474")).rows[0];
-  const beforeHist = (await db.query('SELECT count(*)::int AS c FROM price_history WHERE medicine_id = $1', [med.id])).rows[0].c;
+    med = (await c.query("SELECT id FROM medicines WHERE source_product_id = 12474")).rows[0];
+    readHistCount = async () => (await c.query('SELECT count(*)::int AS c FROM price_history WHERE medicine_id = $1', [med.id])).rows[0].c;
+    readOfferSales = async () => (await c.query('SELECT offer_sales::text FROM medicine_prices WHERE medicine_id = $1', [med.id])).rows[0].offer_sales;
+    closeDb = async () => c.end();
+  }
+  beforeHist = await readHistCount();
   const rec = JSON.parse(fs.readFileSync('/home/z/my-project/download/bangladesh-medicine-price-database/data/products.jsonl', 'utf8').split('\n').find((l) => l.includes('"p_id":12474')));
   const ingested = await fetch(BASE + '/ingest/records', {
     method: 'POST', headers: H,
@@ -169,18 +186,35 @@ log('');
   });
   const ib = await ingested.json();
   check('ingest records accepted', ingested.status === 200 && ib?.data?.accepted === 1, JSON.stringify(ib?.data?.applied));
-  const afterHist = (await db.query('SELECT count(*)::int AS c FROM price_history WHERE medicine_id = $1', [med.id])).rows[0].c;
-  const current = (await db.query('SELECT offer_sales::text FROM medicine_prices WHERE medicine_id = $1', [med.id])).rows[0];
+  const afterHist = await readHistCount();
+  const currentOffer = await readOfferSales();
+  await closeDb();
   check('price change recorded in history', afterHist === beforeHist + 1, `${beforeHist} → ${afterHist} entries`);
-  check('current offer_sales updated to 9.99', current.offer_sales === '9.99', `got ${current.offer_sales}`);
+  check('current offer_sales updated to 9.99', currentOffer === '9.99', `got ${currentOffer}`);
   // restore original values via a second ingestion (append-only history grows by design)
   const restore = await fetch(BASE + '/ingest/records', { method: 'POST', headers: H, body: JSON.stringify({ records: [rec] }) });
   const rb = await restore.json();
-  const finalHist = (await db.query('SELECT count(*)::int AS c FROM price_history WHERE medicine_id = $1', [med.id])).rows[0].c;
-  const finalPrice = (await db.query('SELECT offer_sales::text FROM medicine_prices WHERE medicine_id = $1', [med.id])).rows[0];
-  check('restore ingestion works (idempotent pipeline)', restore.status === 200 && finalPrice.offer_sales === '10.80',
-    `final offer_sales ${finalPrice.offer_sales}, history now ${finalHist} entries`);
-  await db.end();
+  // reopen read handle for the restore verification
+  let finalHist, finalOffer;
+  if (unifiedTarget) {
+    const requireWeb = createRequire(pathMod.resolve(scriptDir9, '..', '..', 'web', 'package.json'));
+    const Database = requireWeb('better-sqlite3');
+    const sq = new Database(pathMod.resolve(scriptDir9, '..', '..', 'data', 'medora.sqlite'), { readonly: true });
+    finalHist = sq.prepare('SELECT count(*) AS c FROM price_history WHERE medicine_id = ?').get(med.id).c;
+    finalOffer = sq.prepare('SELECT CAST(offer_sales AS TEXT) AS os FROM medicine_prices WHERE medicine_id = ?').get(med.id).os;
+    sq.close();
+  } else {
+    const { Client } = await import('pg');
+    const c = new Client({ connectionString: 'postgres://medora@127.0.0.1:5433/medora' });
+    await c.connect();
+    finalHist = (await c.query('SELECT count(*)::int AS c FROM price_history WHERE medicine_id = $1', [med.id])).rows[0].c;
+    finalOffer = (await c.query('SELECT offer_sales::text FROM medicine_prices WHERE medicine_id = $1', [med.id])).rows[0].offer_sales;
+    await c.end();
+  }
+  // Numeric comparison: SQLite NUMERIC affinity stores 10.80 as 10.8 (value
+  // identical; PostgreSQL NUMERIC preserved trailing zeros as text formatting).
+  check('restore ingestion works (idempotent pipeline)', restore.status === 200 && Number(finalOffer) === 10.8,
+    `final offer_sales ${finalOffer}, history now ${finalHist} entries`);
 }
 
 /* ---- 10. safe DB-error handling (separate instance with unreachable DB) ---- */
@@ -193,10 +227,11 @@ log('');
   const webDir = path.resolve(scriptDir, '..', '..', 'web');
   const unified = (process.env.API_BASE ?? '').includes(':3000');
   const badDb = 'postgres://bad:bad@127.0.0.1:59999/bad';
+  const badSqlite = 'MEDORA_DB_PATH=' + '/nonexistent/bad-dir/bad.sqlite';
   // detached + group kill so the npx grandchild cannot orphan itself on :4001
   const proc = unified
-    ? spawn('npx', ['next', 'start', '-p', '4001'], { cwd: webDir, env: { ...process.env, DATABASE_URL: badDb, PORT: '4001' }, stdio: 'ignore', detached: true })
-    : spawn('npx', ['tsx', 'src/server.ts'], { cwd: platformDir, env: { ...process.env, DATABASE_URL: badDb, PORT: '4001' }, stdio: 'ignore', detached: true });
+    ? spawn('npx', ['next', 'start', '-p', '4001'], { cwd: webDir, env: { ...process.env, DATABASE_URL: badDb, MEDORA_DB_PATH: '/nonexistent/bad-dir/bad.sqlite', PORT: '4001' }, stdio: 'ignore', detached: true })
+    : spawn('npx', ['tsx', 'src/server.ts'], { cwd: platformDir, env: { ...process.env, DATABASE_URL: badDb, MEDORA_DB_PATH: '/nonexistent/bad-dir/bad.sqlite', PORT: '4001' }, stdio: 'ignore', detached: true });
   const waitUp = async (ms) => {
     const t0 = Date.now();
     while (Date.now() - t0 < ms) {

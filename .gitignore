@@ -16,3 +16,15 @@ Thumbs.db
 # upload via GitHub Releases if you want them in the cloud.
 data/products.jsonl
 data/products.json
+
+# Phase 4: embedded SQLite database — 106 MB exceeds GitHub's 100 MB limit.
+# Rebuild: npm run db:init && npm run import:data
+# (or web/scripts/migrate-pg-to-sqlite.mjs from a PostgreSQL backup)
+data/medora.sqlite
+data/medora.sqlite-wal
+data/medora.sqlite-shm
+data/medora.sqlite.pre-restore.bak
+data/backups/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

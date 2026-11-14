@@ -5,9 +5,9 @@ const nextConfig: NextConfig = {
   // app (only app/ + public/ are). They remain for the static deployment.
   reactStrictMode: true,
   poweredByHeader: false,
-  // pg must stay external so the unified API route handlers use the native
-  // driver (serverless-safe: point DATABASE_URL at a pooled connection).
-  serverExternalPackages: ['pg'],
+  // better-sqlite3 must stay external so the unified API route handlers use
+  // the native driver against the embedded database file (serverless-safe).
+  serverExternalPackages: ['better-sqlite3'],
   async headers() {
     return [
       {

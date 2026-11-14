@@ -1,13 +1,18 @@
 /* Medora — unified app configuration (zod), server-side only.
    Next.js loads .env / .env.local automatically; this module validates and
-   defaults the variables the unified application needs. Mirrors the schema of
-   the (now superseded) platform/src/config.ts so behaviour is identical. */
+   defaults the variables the unified application needs.
+   Phase 4 (SQLite): the database is a project-local file — MEDORA_DB_PATH —
+   no separately rented database service is required. DATABASE_URL is kept as
+   an optional legacy variable only so environments that still carry it are
+   not rejected by validation. */
 import { z } from 'zod';
 
 const schema = z.object({
-  // Same default as the platform config: validation-only paths work without env,
-  // anything touching the database fails loudly if the URL is unreachable.
-  DATABASE_URL: z.string().default('postgres://medora:medora@localhost:5432/medora'),
+  // Self-contained SQLite database file (created by `npm run db:init`,
+  // populated by the PG migrator or `npm run import:data`).
+  MEDORA_DB_PATH: z.string().default(''),
+  // Legacy PostgreSQL URL — accepted but unused by the unified app.
+  DATABASE_URL: z.string().optional(),
   DB_POOL_MAX: z.coerce.number().int().min(1).max(50).default(10),
   ACCESS_CONTROL_ORIGIN: z.string().default('*'),
   RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).default(120),
