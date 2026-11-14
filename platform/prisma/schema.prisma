@@ -1,0 +1,278 @@
+// Medora — canonical database schema (Prisma).
+// The runtime data layer uses node-postgres (see PRISMA.md for the rationale and
+// the mechanical path to run this schema through the Prisma client instead).
+// Table/column semantics mirror db/migrations/0001_init.sql exactly.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum VerificationStatus {
+  VERIFIED
+  PARTIALLY_VERIFIED
+  NEEDS_RECHECK
+  FAILED
+}
+
+enum RunStatus {
+  running
+  completed
+  partial
+  failed
+}
+
+enum ImportStatus {
+  running
+  completed
+  failed
+  aborted
+}
+
+enum PriceSource {
+  api            // values taken verbatim from the catalogue search API
+  api_plus_detail // API values cross-checked against the product detail page
+  detail_page    // recovered from the public product page (sitemap reconciliation)
+}
+
+model Source {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique // e.g. "arogga"
+  name        String
+  baseUrl     String   @map("base_url")
+  apiEndpoint String?  @map("api_endpoint")
+  robotsNote  String?  @map("robots_note")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  medicines  Medicine[]
+  companies  Company[]
+  categories Category[]
+  scrapeRuns ScrapeRun[]
+
+  @@map("sources")
+}
+
+model Company {
+  id              Int      @id @default(autoincrement())
+  sourceId        Int      @map("source_id")
+  sourceKey       String   @map("source_key") // "id:37" or "name:skin-o" for name-derived rows
+  name            String
+  slug            String   @unique
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  source    Source     @relation(fields: [sourceId], references: [id])
+  medicines Medicine[]
+
+  @@unique([sourceId, sourceKey])
+  @@index([name])
+  @@map("companies")
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  sourceId  Int      @map("source_id")
+  sourceKey String   @map("source_key") // "id:6574"
+  type      String?  // top-level product type: medicine, beauty, healthcare, ...
+  name      String
+  slug      String   @unique
+  parentId  Int?     @map("parent_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  source    Source            @relation(fields: [sourceId], references: [id])
+  parent    Category?         @relation("CategoryTree", fields: [parentId], references: [id])
+  children  Category[]        @relation("CategoryTree")
+  medicines MedicineCategory[]
+
+  @@unique([sourceId, sourceKey])
+  @@index([type])
+  @@index([name])
+  @@map("categories")
+}
+
+model Medicine {
+  id                   Int                @id @default(autoincrement())
+  sourceId             Int                @map("source_id")
+  sourceProductId      Int                @map("source_product_id")
+  name                 String
+  nameBn               String?            @map("name_bn")
+  slug                 String             @unique
+  genericName          String?            @map("generic_name")
+  genericSourceId      Int?               @map("generic_source_id")
+  strength             String?
+  dosageForm           String?            @map("dosage_form")
+  productType          String?            @map("product_type")
+  prescriptionRequired Boolean            @default(false) @map("prescription_required")
+  activeStatus         String?            @map("active_status")
+  allowSales           Boolean            @default(true) @map("allow_sales")
+  variantCount         Int?               @map("variant_count")
+  minQty               Int?               @map("min_qty")
+  maxQty               Int?               @map("max_qty")
+  verificationStatus   VerificationStatus @default(PARTIALLY_VERIFIED) @map("verification_status")
+  missingFields        String[]           @default([]) @map("missing_fields")
+  sourceUrl            String?            @map("source_url")
+  companyId            Int?               @map("company_id")
+  primaryCategoryId    Int?               @map("primary_category_id")
+  lastImportedAt       DateTime           @default(now()) @map("last_imported_at")
+  lastVerifiedAt       DateTime?          @map("last_verified_at")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @default(now()) @updatedAt @map("updated_at")
+
+  source          Source            @relation(fields: [sourceId], references: [id])
+  company         Company?          @relation(fields: [companyId], references: [id])
+  primaryCategory Category?         @relation("PrimaryCategory", fields: [primaryCategoryId], references: [id])
+  categories      MedicineCategory[]
+  price           MedicinePrice?
+  priceHistory    PriceHistory[]
+  images          ProductImage[]
+  validations     DataValidation[]
+
+  @@unique([sourceId, sourceProductId])
+  @@index([genericName])
+  @@index([productType])
+  @@index([dosageForm])
+  @@index([companyId])
+  @@index([lastVerifiedAt])
+  @@map("medicines")
+}
+
+model MedicineCategory {
+  medicineId  Int      @map("medicine_id")
+  categoryId  Int      @map("category_id")
+  isPrimary   Boolean  @default(false) @map("is_primary")
+  assignedAt  DateTime @default(now()) @map("assigned_at")
+
+  medicine Medicine @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([medicineId, categoryId])
+  @@map("medicine_categories")
+}
+
+model MedicinePrice {
+  medicineId           Int         @id @map("medicine_id")
+  // Base unit = smallest selling unit (e.g. per Tablet).
+  baseUnit             String?     @map("base_unit") // pu_base_unit_label
+  baseUnitMultiplier   Decimal?    @map("base_unit_multiplier") // pu_base_unit_multiplier
+  regularBase          Decimal?    @map("regular_base") // pv_mrp
+  offerBase            Decimal?    @map("offer_base") // pv_b2c_discounted_price
+  // Sales unit = customer-facing pack (e.g. per Strip).
+  salesUnit            String?     @map("sales_unit") // pu_b2c_sales_unit_label
+  salesUnitMultiplier  Decimal?    @map("sales_unit_multiplier") // pu_b2c_base_unit_multiplier
+  regularSales         Decimal?    @map("regular_sales") // pv_b2c_mrp
+  offerSales           Decimal?    @map("offer_sales") // pv_b2c_price
+  discountPercent      Decimal?    @map("discount_percent") // pv_b2c_discount_percent
+  priceSource          PriceSource @default(api) @map("price_source")
+  scrapeRunId          Int?        @map("scrape_run_id")
+  updatedAt            DateTime    @default(now()) @updatedAt @map("updated_at")
+
+  medicine Medicine @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  scrapeRun ScrapeRun? @relation(fields: [scrapeRunId], references: [id])
+
+  @@map("medicine_prices")
+}
+
+model PriceHistory {
+  id            BigInt   @id @default(autoincrement())
+  medicineId    Int      @map("medicine_id")
+  regularBase   Decimal? @map("regular_base")
+  offerBase     Decimal? @map("offer_base")
+  regularSales  Decimal? @map("regular_sales")
+  offerSales    Decimal? @map("offer_sales")
+  changedFields String[] @default([]) @map("changed_fields")
+  scrapeRunId   Int?     @map("scrape_run_id")
+  recordedAt    DateTime @default(now()) @map("recorded_at")
+
+  medicine Medicine @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+
+  @@index([medicineId, recordedAt(sort: Desc)])
+  @@map("price_history")
+}
+
+model ProductImage {
+  id          BigInt    @id @default(autoincrement())
+  medicineId  Int       @map("medicine_id")
+  url         String
+  cdnKey      String?   @map("cdn_key")
+  title       String?
+  isPrimary   Boolean   @default(false) @map("is_primary")
+  available   Boolean   @default(true)
+  validatedAt DateTime? @map("validated_at")
+
+  medicine Medicine @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+
+  @@unique([medicineId, url])
+  @@map("product_images")
+}
+
+model ScrapeRun {
+  id                Int       @id @default(autoincrement())
+  runId             String    @unique @map("run_id")
+  mode              String
+  source            String    @default("crawl") // crawl | import | ingest
+  status            RunStatus @default(running)
+  startedAt         DateTime  @default(now()) @map("started_at")
+  finishedAt        DateTime? @map("finished_at")
+  durationMs        Int?      @map("duration_ms")
+  apiRequests       Int?      @map("api_requests")
+  pagesDiscovered   Int?      @map("pages_discovered")
+  pagesProcessed    Int?      @map("pages_processed")
+  productsCollected Int?      @map("products_collected")
+  coveragePct       Decimal?  @map("coverage_pct")
+  fullCoverage      Boolean?  @map("full_coverage")
+  stats             Json?
+  coverageGaps      Json?     @map("coverage_gaps")
+
+  prices MedicinePrice[]
+
+  @@map("scrape_runs")
+}
+
+model ImportJob {
+  id          BigInt       @id @default(autoincrement())
+  scrapeRunId Int?         @map("scrape_run_id")
+  mode        String       @default("full") // full | resume | dry-run
+  status      ImportStatus @default(running)
+  inputFiles  String[]     @default([]) @map("input_files")
+  totals      Json?
+  checkpoint  Json?
+  error       String?
+  startedAt   DateTime     @default(now()) @map("started_at")
+  finishedAt  DateTime?    @map("finished_at")
+
+  validations DataValidation[]
+
+  @@map("import_jobs")
+}
+
+model DataValidation {
+  id          BigInt             @id @default(autoincrement())
+  medicineId  Int                @map("medicine_id")
+  importJobId BigInt?            @map("import_job_id")
+  status      VerificationStatus
+  issues      Json?
+  conflicts   Json?
+  duplicateOf Int?               @map("duplicate_of") // fuzzy candidate target — never auto-merged
+  checkedAt   DateTime           @default(now()) @map("checked_at")
+
+  medicine Medicine  @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  importJob ImportJob? @relation(fields: [importJobId], references: [id])
+
+  @@index([medicineId])
+  @@index([status])
+  @@map("data_validations")
+}
+
+model SlugRedirect {
+  id        Int      @id @default(autoincrement())
+  oldSlug   String   @unique @map("old_slug")
+  newSlug   String   @map("new_slug")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("slug_redirects")
+}

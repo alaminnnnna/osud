@@ -1,0 +1,26 @@
+{
+  "name": "bangladesh-medicine-price-database",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Local Bangladesh medicine price catalogue: single-file Node.js crawler for the public Arogga catalogue API + static price intelligence web app (no backend server).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "scrape": "node scrape.js",
+    "rebuild-web": "node scrape.js --rebuild-web",
+    "serve": "python3 -m http.server 8080 --directory web"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "keywords": [
+    "bangladesh",
+    "medicine",
+    "price",
+    "arogga",
+    "catalogue",
+    "scraper",
+    "static-site"
+  ]
+}

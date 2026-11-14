@@ -1,0 +1,36 @@
+{
+  "name": "medora-platform",
+  "version": "2.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Medora production platform: PostgreSQL database, import engine, dynamic REST API, server-side search, admin dashboard and scraper ingestion for the Bangladesh medicine price catalogue.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "db:migrate": "tsx src/migrate.ts",
+    "db:verify": "tsx src/verify.ts",
+    "import:data": "tsx src/import-cli.ts",
+    "import:resume": "tsx src/import-cli.ts --resume",
+    "import:dry-run": "tsx src/import-cli.ts --dry-run",
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "compression": "^1.7.4",
+    "express": "^5.3.0",
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.8.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

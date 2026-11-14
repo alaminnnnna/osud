@@ -1,0 +1,64 @@
+/* MedPrice BD — design tokens. See DESIGN.md for rationale and contrast math. */
+
+:root {
+  --bg: #FFFFFF;
+  --surface: #F6F8F7;
+  --surface-2: #EFF3F0;
+  --fg: #17211C;
+  --fg-2: #4C5A52;
+  --fg-3: #75827A;
+  --border: #E3EAE5;
+  --border-strong: #CFD9D2;
+  --accent: #0E8C5A;
+  --accent-hover: #0B734A;
+  --accent-soft: #E7F5EE;
+  --on-accent: #FFFFFF;
+  --danger: #C64545;
+  --danger-soft: #FBEDED;
+  --warning: #B97F24;
+  --warning-soft: #FAF3E4;
+  --info: #2B6CB0;
+  --info-soft: #EAF1F9;
+  --card: #FFFFFF;
+  --shadow: 0 1px 2px rgba(23, 33, 28, 0.06);
+  --shadow-pop: 0 8px 24px rgba(23, 33, 28, 0.12);
+  --header-blur: rgba(255, 255, 255, 0.82);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    "Noto Sans Bengali", Arial, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+  --t-fast: 120ms;
+  --t-slow: 220ms;
+  --max-w: 1200px;
+  --nav-h: 56px;
+  --tabbar-h: 60px;
+}
+
+html[data-theme="dark"] {
+  --bg: #0A0E0C;
+  --surface: #101613;
+  --surface-2: #161E1A;
+  --fg: #E7EFEA;
+  --fg-2: #A7B4AC;
+  --fg-3: #7C8A81;
+  --border: #243029;
+  --border-strong: #31413A;
+  --accent: #3BD98F;
+  --accent-hover: #5FE4A6;
+  --accent-soft: #12301F;
+  --on-accent: #062B1B;
+  --danger: #F07171;
+  --danger-soft: #2A1515;
+  --warning: #E3B15C;
+  --warning-soft: #2A2113;
+  --info: #6BA7E8;
+  --info-soft: #14202E;
+  --card: #101613;
+  --shadow: none;
+  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --header-blur: rgba(10, 14, 12, 0.82);
+}

@@ -1,0 +1,18 @@
+platform/.env
+platform/.pgdata/
+web/.env.local
+web/.next/
+platform/node_modules/
+web/node_modules/
+
+# build caches & OS noise
+web/tsconfig.tsbuildinfo
+*.log
+.DS_Store
+Thumbs.db
+
+# GitHub rejects files >100 MB (no git-lfs in build env).
+# These stay in the local project and inside medora-complete.zip;
+# upload via GitHub Releases if you want them in the cloud.
+data/products.jsonl
+data/products.json

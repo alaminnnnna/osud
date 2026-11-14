@@ -1,0 +1,22 @@
+# Local development database. Production uses managed PostgreSQL
+# (Render Dashboard / Vercel Postgres / Neon / Supabase) — set DATABASE_URL there.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: medora
+      POSTGRES_PASSWORD: medora
+      POSTGRES_DB: medora
+    ports:
+      - "5432:5432"
+    volumes:
+      - medora_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U medora -d medora"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  medora_pgdata:
