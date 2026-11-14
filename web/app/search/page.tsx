@@ -40,7 +40,6 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     error = e instanceof Error ? e.message : 'Search failed';
   }
 
-  let forms: string[] = [];
   let companies: { slug: string; name: string }[] = [];
   try {
     const cRes = await api<CompanyItem[]>('/companies?limit=50', { revalidate: 600 });

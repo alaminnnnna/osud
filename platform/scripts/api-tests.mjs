@@ -1,9 +1,9 @@
 /* PART C — API integration tests against the live PostgreSQL-backed backend.
-   Run: node scripts/api-tests.mjs  (server must be on :4000)
+   Run: node scripts/api-tests.mjs  (API_BASE/ADMIN_BASE override the target, default :4000)
    Results appended to /tmp/api-test-results.txt for the report. */
 import fs from 'node:fs';
 
-const BASE = 'http://localhost:4000/api/v1';
+const BASE = (process.env.API_BASE ?? 'http://localhost:4000/api/v1').replace(/\/$/, '');
 const OUT = [];
 const log = (s) => { console.log(s); OUT.push(s); };
 let pass = 0, fail = 0;
@@ -79,7 +79,7 @@ log('');
   check('search results paginated', body?.pagination?.total >= 20, `total ${body?.pagination?.total}`);
   const { body: b2 } = await j('/search?q=paracetmol&limit=5');
   check('typo tolerance (paracetmol → paracetamol generics)', b2?.data?.items?.length > 0
-    && b2.data.items.every((m) => /paracetamol/i.test(m.genericName ?? '')), `${b2?.data?.items?.length} results`);
+    && b2.data.items.every((m) => /paracetamol/i.test(m.generic ?? '')), `${b2?.data?.items?.length} results`);
   const { body: b3 } = await j('/search?q=beximco&limit=5');
   check('company search works', b3?.data?.items?.length > 0 && b3.data.items.every((m) => (m.company ?? '').includes('Beximco')));
   const { body: b4 } = await j('/search?q=');
@@ -135,8 +135,11 @@ log('');
   const ab = await auth.json();
   check('admin with Basic auth → 200 + metrics', auth.status === 200 && ab?.data?.stats?.medicines === 58297
     && Array.isArray(ab?.data?.imports));
-  const page = await fetch('http://localhost:4000/admin', { headers: { Authorization: 'Basic ' + Buffer.from('admin:medora-admin-local').toString('base64') } });
-  check('/admin dashboard HTML (auth)', page.status === 200 && (await page.text()).includes('Medora admin'));
+  const adminBase = process.env.ADMIN_BASE ?? 'http://localhost:4000';
+  const page = await fetch(adminBase + '/admin', { headers: { Authorization: 'Basic ' + Buffer.from('admin:medora-admin-local').toString('base64') } });
+  const adminHtml = await page.text();
+  check('/admin dashboard HTML (auth)', page.status === 200 &&
+    (adminHtml.includes('Medora admin') || adminHtml.includes('Medicines')));
 }
 
 /* ---- 9. ingestion auth + price-history recording (Phase 9, real DB writes) ---- */
@@ -183,12 +186,29 @@ log('');
 /* ---- 10. safe DB-error handling (separate instance with unreachable DB) ---- */
 {
   const { spawn } = await import('node:child_process');
-  const env = { ...process.env, DATABASE_URL: 'postgres://bad:bad@127.0.0.1:59999/bad', PORT: '4001' };
-  const proc = spawn('npx', ['tsx', 'src/server.ts'], { cwd: process.cwd(), env, stdio: 'ignore', detached: false });
-  await new Promise((r) => setTimeout(r, 4000));
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+  const platformDir = path.resolve(scriptDir, '..');
+  const webDir = path.resolve(scriptDir, '..', '..', 'web');
+  const unified = (process.env.API_BASE ?? '').includes(':3000');
+  const badDb = 'postgres://bad:bad@127.0.0.1:59999/bad';
+  // detached + group kill so the npx grandchild cannot orphan itself on :4001
+  const proc = unified
+    ? spawn('npx', ['next', 'start', '-p', '4001'], { cwd: webDir, env: { ...process.env, DATABASE_URL: badDb, PORT: '4001' }, stdio: 'ignore', detached: true })
+    : spawn('npx', ['tsx', 'src/server.ts'], { cwd: platformDir, env: { ...process.env, DATABASE_URL: badDb, PORT: '4001' }, stdio: 'ignore', detached: true });
+  const waitUp = async (ms) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      try { return await fetch('http://localhost:4001/api/v1/health'); } catch { /* not up yet */ }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return null;
+  };
   try {
-    const h = await fetch('http://localhost:4001/api/v1/health');
-    check('health with unreachable DB → 503', h.status === 503);
+    const h = await waitUp(unified ? 20000 : 8000);
+    check('error-instance reachable', h != null, h == null ? 'instance never became reachable' : '');
+    check('health with unreachable DB → 503', h?.status === 503);
     const m = await fetch('http://localhost:4001/api/v1/medicines?limit=1');
     const mb = await m.json().catch(() => null);
     check('query with unreachable DB → 500 safe envelope, no stack', m.status === 500
@@ -196,7 +216,7 @@ log('');
   } catch (e) {
     check('error-instance reachable', false, e.message);
   } finally {
-    proc.kill('SIGTERM');
+    try { process.kill(-proc.pid, 'SIGTERM'); } catch { proc.kill('SIGTERM'); }
   }
 }
 

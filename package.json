@@ -1,13 +1,24 @@
 {
   "name": "bangladesh-medicine-price-database",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Local Bangladesh medicine price catalogue: single-file Node.js crawler for the public Arogga catalogue API + static price intelligence web app (no backend server).",
+  "description": "Medora — Bangladesh medicine price intelligence platform: one unified Next.js app (frontend + /api/v1), independent scraper, external PostgreSQL.",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
+    "dev": "npm --prefix web run dev",
+    "build": "npm --prefix web run build",
+    "start": "npm --prefix web run start",
+    "lint": "npm --prefix web run lint",
+    "typecheck": "npm --prefix web run typecheck && npm --prefix platform run typecheck",
+    "test": "API_BASE=${API_BASE:-http://localhost:3000/api/v1} ADMIN_BASE=${ADMIN_BASE:-http://localhost:3000} node platform/scripts/api-tests.mjs",
+    "db:migrate": "npm --prefix platform run db:migrate",
+    "db:verify": "npm --prefix platform run db:verify",
+    "import:data": "npm --prefix platform run import:data",
+    "import:resume": "npm --prefix platform run import:resume",
+    "import:dry-run": "npm --prefix platform run import:dry-run",
     "scrape": "node scrape.js",
     "rebuild-web": "node scrape.js --rebuild-web",
     "serve": "python3 -m http.server 8080 --directory web"
@@ -21,6 +32,7 @@
     "arogga",
     "catalogue",
     "scraper",
-    "static-site"
+    "nextjs",
+    "unified"
   ]
 }

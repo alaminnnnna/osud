@@ -45,7 +45,9 @@ export async function middleware(req: NextRequest) {
   // --- entity detail routes: pre-render 404 gate + old-slug redirect ---
   const path = req.nextUrl.pathname;
   if (req.method !== 'GET' || path.includes('.') || path === '/') return NextResponse.next();
-  const backend = (process.env.BACKEND_URL ?? 'http://localhost:4000').replace(/\/$/, '');
+  // Unified app (Phase 4): the API lives in this same application — the gate
+  // calls the same-origin /api/v1 route handlers instead of a separate backend.
+  const backend = req.nextUrl.origin;
   const segs = path.slice(1).replace(/\/$/, '').split('/');
   const gate404 = () => new NextResponse(NOT_FOUND_HTML, {
     status: 404,

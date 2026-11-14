@@ -1,10 +1,12 @@
-/* Medora — robots.txt: dynamic frontend sitemap + partitioned backend sitemaps. */
+/* Medora — robots.txt (unified app).
+   The Next app now serves both the frontend sitemap (app/sitemap.ts) and the
+   prerendered static-site sitemaps that ship inside web/ — same origin. */
 import type { MetadataRoute } from 'next';
-import { SITE_URL, BACKEND_URL } from '@/lib/api';
+import { SITE_URL } from '@/lib/api';
 
 export default function robots(): MetadataRoute.Robots {
   return {
     rules: [{ userAgent: '*', allow: '/', disallow: ['/admin', '/api/'] }],
-    sitemap: [`${BACKEND_URL}/sitemap.xml`, `${SITE_URL}/sitemap.xml`],
+    sitemap: [`${SITE_URL}/sitemap.xml`],
   };
 }

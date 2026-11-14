@@ -1,18 +1,14 @@
-/* Medora — Next.js route handler proxying suggestions to the backend so the
-   browser never talks to the backend origin directly. */
+/* Medora — search suggestions for the browser (unified app).
+   Calls the shared service layer directly — no backend origin exists anymore. */
 import { NextRequest, NextResponse } from 'next/server';
-import { BACKEND_URL } from '@/lib/api';
+import { suggestions } from '@/lib/server/search';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get('q') ?? '';
-  const upstream = await fetch(`${BACKEND_URL}/api/v1/search/suggestions?q=${encodeURIComponent(q)}`, {
-    cache: 'no-store',
-  });
-  const body = await upstream.json();
-  return NextResponse.json(body, {
-    status: upstream.status,
+  const body = await suggestions(q, 8);
+  return NextResponse.json({ success: true, data: body }, {
     headers: { 'Cache-Control': 'public, max-age=30' },
   });
 }

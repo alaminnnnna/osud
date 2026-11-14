@@ -2,7 +2,7 @@
    Server Component; data from the PostgreSQL-backed API (fresh, never bundled). */
 import Link from 'next/link';
 import { api, type StatsData, type MedicineListItem, type CompanyItem, type CategoryItem } from '@/lib/api';
-import { num, stampDate } from '@/lib/format';
+import { num } from '@/lib/format';
 import { MedicineCard, DataFreshness, EmptyState } from '@/components/ui';
 
 export const dynamic = 'force-dynamic';

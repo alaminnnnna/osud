@@ -1,6 +1,12 @@
-/* Medora — server-side API access to the platform backend. */
+/* Medora — unified data access (Phase 4).
+   The Next.js app IS the backend now: server components resolve API paths
+   directly against the shared service layer (lib/server/*) — same functions
+   the /api/v1 route handlers use, no HTTP hop, no second origin. Response
+   envelopes are identical to the REST API. */
+import 'server-only';
+import { localApi } from './server/dispatch';
+export { ApiError } from './server/http';
 
-export const BACKEND_URL = (process.env.BACKEND_URL ?? 'http://localhost:4000').replace(/\/$/, '');
 export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000').replace(/\/$/, '');
 
 export interface Envelope<T> {
@@ -83,38 +89,28 @@ export interface AdminMetrics {
   database: { poolTotal: number; poolIdle: number; poolWaiting: number };
 }
 
-export class ApiError extends Error {
-  status: number;
-  code: string;
-  constructor(status: number, code: string, message: string) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
-
+/**
+ * Resolve an API path (same paths as /api/v1) against the local service
+ * layer. `revalidate`/`noStore` options are accepted for call-site
+ * compatibility; server components now read live database state directly.
+ */
 export async function api<T>(path: string, opts: { revalidate?: number; noStore?: boolean } = {}): Promise<Envelope<T>> {
-  const res = await fetch(`${BACKEND_URL}/api/v1${path}`, {
-    next: opts.noStore ? { revalidate: 0 } : { revalidate: opts.revalidate ?? 60 },
-    headers: { Accept: 'application/json' },
-  });
-  let body: Envelope<T> | null = null;
-  try { body = await res.json(); } catch { throw new ApiError(res.status, 'bad_gateway', 'Backend returned a non-JSON response.'); }
-  if (!res.ok || !body?.success) {
-    throw new ApiError(res.status, body?.error?.code ?? 'backend_error', body?.error?.message ?? `Backend request failed (${res.status})`);
-  }
-  return body;
+  void opts;
+  const [rawPath, query = ''] = path.split('?');
+  const sp = new URLSearchParams(query);
+  const res = await localApi(rawPath, sp) as Envelope<T>;
+  return res;
 }
 
-/** For admin pages: server-side fetch with server-held Basic credentials. */
+/** For admin pages: metrics resolved locally with server-held env credentials. */
 export async function adminApi<T>(path: string): Promise<Envelope<T> | null> {
   const user = process.env.ADMIN_USERNAME ?? '';
   const pass = process.env.ADMIN_PASSWORD ?? '';
   if (!user || !pass) return null;
-  const res = await fetch(`${BACKEND_URL}/api/v1${path}`, {
-    headers: { Authorization: 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64') },
-    cache: 'no-store',
-  });
-  if (!res.ok) return null;
-  return res.json() as Promise<Envelope<T>>;
+  const [rawPath, query = ''] = path.split('?');
+  try {
+    return await localApi(rawPath, new URLSearchParams(query)) as Envelope<T>;
+  } catch {
+    return null;
+  }
 }
